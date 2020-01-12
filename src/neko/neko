@@ -1,0 +1,541 @@
+#!/usr/bin/env bash
+#
+
+set -x
+umask 022
+unalias -a
+
+pushd() { command pushd "$1" > /dev/null; }
+popd() { command popd "$1" > /dev/null; }
+msg() { printf "\033[1;32m ->\033[0m %s\n" "$@"; }
+warn() { printf "\033[1;33m ->\033[0m %s\n" "$@"; }
+die() { printf "\033[1;31m ->\033[0m %s\n" "$@"; exit 1; }
+
+usage() { exit 0; }
+
+check_root() {
+	if [[ $EUID -ne 0 ]]; then
+		die "You must be root to run 'neko'"
+	fi
+}
+
+get_filename() {
+	local tgt
+
+	if echo "$1" | grep -q -E '^((https|http|ftp|rtsp|mms|file)?:\/\/).+'; then
+		tgt="$(basename $1)"
+		echo "$srcdest/$tgt"
+	else
+		echo "$1"
+	fi
+}
+
+create_zip() {
+	python3 <<-EOF
+		import npk_archive as NekoArchive
+
+		NekoArchive.CreateZipArchive("$1", "$2")
+	EOF
+}
+
+create_xz() {
+	python3 <<-EOF
+		import npk_archive as NekoArchive
+
+		NekoArchive.CreateXZArchive("$1", "$2")
+	EOF
+}
+
+source_config() {
+	if [ ! -f "$config" ]; then
+		die "Failed to source the configuration file"
+	fi
+
+	source "$config"
+
+	[ "$BARCH" ] || die "Specify CPU architecture"
+}
+
+source_recipe() {
+	unset name version release options backup source noextract
+	unset -f build
+	local myport
+
+	if [ -f "$topdir/KagamiBuild" ]; then
+		myport="$topdir/KagamiBuild"
+	elif [ -f "$topdir/Pkgfile" ]; then
+		myport="$topdir/Pkgfile"
+	else
+		die "Failed to source the package recipe"
+	fi
+
+	source "$myport"
+
+	depends="$(npk-parse $myport "# Depends on:")"
+	conflicts="$(npk-parse $myport "# Conflicts with:")"
+	summary="$(npk-parse $myport "# Description:")"
+	url="$(npk-parse $myport "# URL:")"
+	section="$(npk-parse $myport "# Section:")"
+	priority="$(npk-parse $myport "# Priority:")"
+	maintainer="$(npk-parse $myport "# Maintainer:" | sed -e 's/, / /g' | sed -e 's/ at /@/g' | sed -e 's/ dot /./')"
+
+	if [ "$bootstrap" = "yes" ]; then
+		if [ -z "$summary" ]; then
+			summary="(null)"
+		fi
+		if [ -z "$section" ]; then
+			section="misc"
+		fi
+	fi
+
+	if [ -z "$name" ]; then
+		die "The name of package is not set"
+	elif [ -z "$version" ]; then
+		die "The version of package is not set"
+	elif [ -z "$release" ]; then
+		die "The release of package is not set"
+	elif [ -z "$summary" ]; then
+		die "The summary of package is not set"
+	elif [ -z "$section" ]; then
+		die "The section of package is not set"
+	fi
+}
+
+parse_options() {
+	for myopts in ${OPTIONS[@]} ${options[@]}; do
+		case $myopts in
+			bootstrap) opt_bootstrap="1" ;;
+			~bootstrap) opt_bootstrap="0" ;;
+			ccache) opt_ccache="1" ;;
+			~ccache) opt_ccache="0" ;;
+			docs) opt_docs="1" ;;
+			~docs) opt_docs="0" ;;
+			emptydirs) opt_emptydirs="1" ;;
+			~emptydirs) opt_emptydirs="0" ;;
+			libtool) opt_libtool="1" ;;
+			~libtool) opt_libtool="0" ;;
+			locales) opt_locales="1" ;;
+			~locales) opt_locales="0" ;;
+			makeflags) opt_makeflags="1" ;;
+			~makeflags) opt_makeflags="0" ;;
+			strip) opt_strip="1" ;;
+			~strip) opt_strip="0" ;;
+		esac
+	done
+}
+
+download_file() {
+	local url="$1"
+
+	if [ ! "`type -p curl`" ]; then
+		die "curl wasn't found"
+	fi
+
+	msg "Downloading $url"
+
+	LOCAL_FILENAME=`get_filename $FILE`
+	LOCAL_FILENAME_PARTIAL="$LOCAL_FILENAME.partial"
+	cmd="-f --retry 3 --retry-delay 3 -L -o $LOCAL_FILENAME_PARTIAL $CURLOPTS"
+	resumecmd="-C -"
+	fullcmd="curl $cmd"
+	RESUME="no"
+
+	if [ -f "$LOCAL_FILENAME_PARTIAL" ]; then
+		warn "Partial download found, trying to resume"
+		RESUME="yes"
+		fullcmd="$fullcmd $resumecmd"
+	fi
+
+	error=1
+
+	if [ $error != 0 ]; then
+		while true; do
+			$fullcmd $1
+			error=$?
+			if [ $error != 0 ] && [ "$RESUME" = "yes" ]; then
+				warn "Partial download failed, restarting"
+				rm -f "$LOCAL_FILENAME_PARTIAL"
+				RESUME="yes"
+			else
+				break
+			fi
+		done
+	fi
+
+	if [ $error != 0 -o ! -f "$LOCAL_FILENAME_PARTIAL" ]; then
+		die "Downloading '${1}' failed."
+	fi
+
+	mv -f "$LOCAL_FILENAME_PARTIAL" "$LOCAL_FILENAME"
+}
+
+download_source() {
+	local FILE LOCAL_FILENAME tgt
+
+	if [ -n "$source" ]; then
+		for FILE in ${source[@]}; do
+			if echo "$FILE" | grep -q -E '^((git)?:\/\/).+' || echo "$FILE" | grep -q -E '.*\.git$'; then
+				tgt="$(basename $FILE)"
+				if [ ! -d "$SRC/$tgt" ]; then
+					msg "Clonning $FILE"
+					git clone $GITOPTS $FILE "$SRC/$tgt"
+				fi
+			elif echo "$FILE" | grep -q -E '^((https|http|ftp|rtsp|mms)?:\/\/).+'; then
+				LOCAL_FILENAME=`get_filename $FILE`
+				if [ ! -e $LOCAL_FILENAME ]; then
+					if [ "$LOCAL_FILENAME" = "$FILE" ]; then
+						die "Source file '$LOCAL_FILENAME' not found (can not be downloaded, URL not specified)."
+					else
+						download_file $FILE
+					fi
+				fi
+			fi
+		done
+	fi
+}
+
+unpack_source() {
+	if [ "$source" ]; then
+		for FILE in ${source[@]}; do
+			FILENAME="$(basename $FILE)"
+			LOCAL_FILENAME=`get_filename $FILE`
+
+			for NOEXT in ${noextract[@]}; do
+				if [ "$NOEXT" = "$FILENAME" ]; then
+					nxt=1
+					break
+				fi
+			done
+
+			if [ "$FILENAME" != "$FILE" ] && [ "$nxt" != 1 ]; then
+				case $LOCAL_FILENAME in
+					*.tar|*.tar.gz|*.tar.Z|*.tgz|*.tar.bz2|*.tbz2|*.tar.xz|*.txz|*.tar.lzma|*.tar.lz|*.tlz|*.tar.lz4|*.tar.zst|*.tar.zstd|*.zip|*.rpm|*.7z)
+						msg "Extacting $FILENAME to the sources directory"
+						bsdtar -p -o -C "$SRC" -xf $LOCAL_FILENAME || die "Failed to extract $FILENAME to the sources directory"
+						;;
+					*)
+						msg "Copying $FILENAME to the sources directory"
+						cp $LOCAL_FILENAME "$SRC" || die "Failed to copy $FILENAME to the sources directory"
+						;;
+				esac
+			else
+				msg "Copying $FILENAME to the sources directory"
+				cp $LOCAL_FILENAME "$SRC" || die "Failed to copy $FILENAME to the sources directory"
+			fi
+			nxt=
+		done
+	fi
+}
+
+run_strip() {
+	local fs="$1"
+
+	( cd "$fs"
+		find . | xargs file | grep "executable" | grep ELF | cut -f 1 -d : | xargs ${CROSS_COMPILE}strip --strip-all 2>/dev/null
+		find . | xargs file | grep "shared object" | grep ELF | cut -f 1 -d : | xargs ${CROSS_COMPILE}strip --strip-unneeded 2>/dev/null
+		find . | xargs file | grep "current ar archive" | cut -f 1 -d : | xargs ${CROSS_COMPILE}strip --strip-debug 2>/dev/null
+	)
+}
+
+setup_compiler() {
+	if [ -n "$CC" ]; then
+		MYCC="$CC"
+	else
+		MYCC="gcc"
+	fi
+	if [ -n "$CXX" ]; then
+		MYCXX="$CXX"
+	else
+		MYCXX="g++"
+	fi
+}
+
+compile_package() {
+	if [ "$opt_makeflags" != "0" ]; then
+		export MAKEFLAGS="$MKOPTS"
+		export NINJA_OPTIONS="$MKOPTS"
+	fi
+
+	if [ "$bootstrap" != "yes" ]; then
+		if [ "$opt_cache" != "0" ]; then
+			if type ccache > /dev/null 2>&1; then
+				if [ -n "$CC" ]; then
+					MYCC="ccache $CC"
+				else
+					MYCC="ccache gcc"
+				fi
+				if [ -n "$CXX" ]; then
+					MYCXX="ccache $CXX"
+				else
+					MYCXX="ccache g++"
+				fi
+			else
+				setup_compiler
+			fi
+		else
+			setup_compiler
+		fi
+	fi
+
+	if type build > /dev/null 2>&1; then
+		msg "Compiling package"
+		pushd "$SRC"
+			(
+				set -e
+				export CC="$MYCC"
+				export CXX="$MYCXX"
+				build
+			)
+			if [ $? -ne 0 ]; then
+				die  "Failed to compile package: $name"
+			fi
+		popd
+	fi
+
+	pushd "$PKG"
+		msg "Removing junk from package"
+		rm -rf {,usr/}{,local/}{,share/}info usr{,/local}{,/share},opt/*}/info
+		rm -rf {,usr/}{,local/}lib/charset.alias
+
+		find . -name "*.pod" -print0 | xargs -0 rm -rf
+		find . -name ".packlist" -print0 | xargs -0 rm -rf
+
+		if [ "$opt_libtool" = "0" ]; then
+			msg "Removing libtool files"
+			find . -name "*.la" -print0 | xargs -0 rm -rf
+		fi
+
+		if [ "$opt_emptydirs" = "0" ]; then
+				msg "Removing empty directories"
+				find . -maxdepth 3 -type d -exec rmdir {} + 2>/dev/null
+		fi
+
+		if [ "$opt_locales" = "0" ]; then
+			msg "Removing locales"
+			rm -rf {,usr/}{,local/}{,share/,lib/}locale
+		fi
+
+		if [ "$opt_docs" = "0" ]; then
+			msg "Removing documentation"
+			rm -rf {,usr/}{,local/}{,share/}doc usr/{,local/}{,share/}{doc,gtk-doc} opt/*/{doc,gtk-doc}
+		fi
+
+		if [ -d "$PKG/usr/share/help" ]; then
+			pushd usr/share/help
+				mv C "$SRC"/
+
+				rm -rf *
+
+				mv "$SRC"/C .
+			popd
+		fi
+
+		if [ "$opt_strip" != "0" ]; then
+			msg "Removing debug information from binary files"
+			run_strip "$PKG"
+		fi
+
+		msg "Compressing manual pages"
+		if [ -d "$PKG/usr/share/man" ]; then
+			(
+				cd "$PKG/usr/share/man"
+				find . -type f -exec pigz -9 '{}' +
+				find . -type l | while read -r file; do
+					ln -sf "$(readlink -- "$file").gz" "${file}.gz"
+					rm "$file"
+				done
+			)
+		fi
+	popd
+}
+
+
+create_package() {
+	local toinclude="manifest.json"
+	mkdir -p "$WORK/final"
+
+	pushd "$WORK"
+		pushd "$PKG"
+			msg "Compressing package data"
+			create_xz . "$WORK"/data.tar.xz
+
+			find $(ls) >> "$WORK"/files.txt
+
+			toinclude+=" data.tar.xz files.txt"
+		popd
+
+		msg "Generating metadata"
+		if [ -z "$priority" ]; then
+			priority="optional"
+		fi
+
+		: > "$WORK"/manifest.json
+
+		echo '{' >> "$WORK"/manifest.json
+		echo -e '\t"summary": {' >> "$WORK"/manifest.json
+		echo -e '\t\t"name": "'${name}'",' >> "$WORK"/manifest.json
+		echo -e '\t\t"version": "'${version}'",' >> "$WORK"/manifest.json
+		echo -e '\t\t"release": "'${release}'",' >> "$WORK"/manifest.json
+		echo -e '\t\t"priority": "'${priority}'",' >> "$WORK"/manifest.json
+		echo -e '\t\t"summary": "'${summary}'",' >> "$WORK"/manifest.json
+		echo -e '\t\t"section": "'${section}'",' >> "$WORK"/manifest.json
+		[ "$url" ] && echo -e '\t\t"homepage": "'${url}'",' >> "$WORK"/manifest.json
+		echo -e '\t\t"maintainer": "'${maintainer}'"' >> "$WORK"/manifest.json
+		echo -e '\t}' >> "$WORK"/manifest.json
+		echo '}' >> "$WORK"/manifest.json
+
+		if [ -n "$backup" ]; then
+			for a in ${backup[@]}; do
+				echo "$a" >> "$WORK"/backup
+			done
+
+			toinclude+=" backup"
+		fi
+
+		if [ -f "$topdir/install.py" ]; then
+			install -Dm0755 "$TOPDIR/install.py" "$topdir"/install.py
+
+			toinclude+=" install.py"
+		fi
+
+		for i in $toinclude; do
+			mv "$WORK"/$i "$WORK/final"/$i
+		done
+
+		pushd "$WORK/final"
+			create_zip . "$TARGET"
+			if [ $? -ne 0 ]; then
+				die "Failed to create package"
+			fi
+		popd
+
+		msg "Package was successfuly built"
+	popd
+}
+
+npk_build() {
+	source_recipe
+
+	if [ -z "$pkgdest" ]; then
+		pkgdest="$topdir"
+	fi
+	if [ -z "$srcdest" ]; then
+		srcdest="$topdir"
+	fi
+
+	TARGET="$pkgdest/$name-$version-$release.$BARCH.npk"
+
+	if [ "$force" = "yes" ]; then
+		rm -rf "$TARGET"
+	fi
+
+	if [ ! -f "$TARGET" ]; then
+		msg "Building package: $name"
+		WORK="$PWD/work"
+		PKG="$WORK/pkg"
+		SRC="$WORK/src"
+
+		rm -rf "$WORK"
+		mkdir -p "$PKG" "$SRC"
+
+		parse_options
+
+		if [ "$bootstrap" = "yes" ]; then
+			if [ "$opt_bootstrap" = "0" ]; then
+				die "This package couldn't be built in the cross environment"
+			fi
+		fi
+
+		if [ "$download" != "no" ]; then
+			download_source
+		fi
+
+		if [ "$extract" != "no" ]; then
+			unpack_source
+		fi
+
+		if [ "$build" != "no" ]; then
+			compile_package
+		fi
+
+		if [ "$package" != "no" ]; then
+			create_package
+			if [ "$clean" != "no" ]; then
+				rm -rf "$WORK"
+			fi
+		fi
+	else
+		warn "Package have already built"
+	fi
+}
+
+main() {
+	topdir="$PWD"
+	config="/etc/neko.config"
+	OPTIONS=('emptydirs' 'strip' 'makeflags' 'locales' 'docs' 'ccache' 'libtool' '~bootstrap' '~embedded')
+
+	force="no"
+	bootstrap="no"
+	needed="no"
+	depends="yes"
+	conflicts="yes"
+	backup="yes"
+	scripts="yes"
+	triggers="yes"
+	clean="yes"
+	download="yes"
+	extract="yes"
+	build="yes"
+	package="yes"
+
+	case $1 in
+		build|bi) shift; mode="npk_build" ;;
+		emerge|em) shift; mode="npk_emerge" ;;
+		info|if) shift; mode="npk_info" ;;
+		install|in) shift; mode="npk_install" ;;
+		list|li) shift; mode="npk_list" ;;
+		remove|rm) shift; mode="npk_remove" ;;
+		search|sr) shift; mode="npk_search" ;;
+		sync|sy) shift; mode="npk_sync" ;;
+		upgrade|up) shift; mode="npk_upgrade" ;;
+		version) version ;;
+		*|help) usage ;;
+	esac
+
+	while getopts :fwndebstCDEBPc:r: opts; do
+		case $opts in
+			c) config="$(realpath $OPTARG)" ;;
+			r) rootdir="$(realpath $OPTARG)"; rootdir="${rootdir%/}" ;;
+			f) force="yes" ;;
+			w) bootstrap="yes" ;;
+			n) needed="yes" ;;
+			d) depends="no" ;;
+			e) conflicts="no" ;;
+			b) backup="no" ;;
+			s) scripts="no" ;;
+			t) triggers="no" ;;
+			C) clean="no" ;;
+			D) download="no" ;;
+			E) extract="no" ;;
+			B) build="no" ;;
+			P) package="no" ;;
+		esac
+	done
+	shift $((OPTIND - 1))
+
+	check_root
+	source_config
+
+	if [ "$mode" = "npk_upgrade" ] || [ "$mode" = "npk_sync" ] || [ "$mode" = "npk_build" ]; then
+		$mode
+	else
+		for pkg in "$@"; do
+			$mode $pkg
+		done
+	fi
+}
+
+main "$@"
+
+exit 0
+
