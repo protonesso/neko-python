@@ -33,7 +33,6 @@ get_filename() {
 create_zip() {
 	python3 <<-EOF
 		import npk_archive as NekoArchive
-
 		NekoArchive.CreateZipArchive("$1", "$2")
 	EOF
 }
@@ -41,8 +40,14 @@ create_zip() {
 create_xz() {
 	python3 <<-EOF
 		import npk_archive as NekoArchive
-
 		NekoArchive.CreateXZArchive("$1", "$2")
+	EOF
+}
+
+comment_variable() {
+	python3 <<-EOF
+		import npk_parse as NekoParse
+		NekoParse.CommentVariable("$1", "$2")
 	EOF
 }
 
@@ -71,13 +76,13 @@ source_recipe() {
 
 	source "$myport"
 
-	depends="$(npk-parse $myport "# Depends on:")"
-	conflicts="$(npk-parse $myport "# Conflicts with:")"
-	summary="$(npk-parse $myport "# Description:")"
-	url="$(npk-parse $myport "# URL:")"
-	section="$(npk-parse $myport "# Section:")"
-	priority="$(npk-parse $myport "# Priority:")"
-	maintainer="$(npk-parse $myport "# Maintainer:" | sed -e 's/, / /g' | sed -e 's/ at /@/g' | sed -e 's/ dot /./')"
+	depends="$(comment_variable $myport "Depends on")"
+	conflicts="$(comment_variable $myport "Conflicts with")"
+	summary="$(comment_variable $myport "Description")"
+	url="$(comment_variable $myport "URL")"
+	section="$(comment_variable $myport "Section")"
+	priority="$(comment_variable $myport "Priority")"
+	maintainer="$(comment_variable $myport "Maintainer" | sed -e 's/, / /g' | sed -e 's/ at /@/g' | sed -e 's/ dot /./')"
 
 	if [ "$bootstrap" = "yes" ]; then
 		if [ -z "$summary" ]; then
@@ -393,7 +398,7 @@ create_package() {
 		fi
 
 		if [ -f "$topdir/install.py" ]; then
-			install -Dm0755 "$TOPDIR/install.py" "$topdir"/install.py
+			install -Dm0755 "$topdir/install.py" "$WORKDIR/install.py"
 
 			toinclude+=" install.py"
 		fi
