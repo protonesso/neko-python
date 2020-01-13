@@ -53,7 +53,7 @@ comment_variable() {
 json_variable() {
 	python3 <<-EOF
 		import npk_parse as NekoParse
-		NekoParse.JsonVariable(("$1", "$2")
+		NekoParse.JsonVariable("$1", "$2")
 	EOF
 }
 

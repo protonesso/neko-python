@@ -26,4 +26,5 @@ def JsonVariable(file, pattern):
 	with open(file, "r+") as jsonfile:
 		data = json.load(jsonfile)
 		if data != None:
-			print(data["%s" % pattern])
+			if data["%s" % pattern] != None:
+				print(data["%s" % pattern])
