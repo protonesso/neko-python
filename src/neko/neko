@@ -29,20 +29,6 @@ get_filename() {
 	fi
 }
 
-create_zip() {
-	python3 <<-EOF
-		import npk_archive as NekoArchive
-		NekoArchive.CreateZipArchive("$1", "$2")
-	EOF
-}
-
-create_xz() {
-	python3 <<-EOF
-		import npk_archive as NekoArchive
-		NekoArchive.CreateXZArchive("$1", "$2")
-	EOF
-}
-
 comment_variable() {
 	python3 <<-EOF
 		import npk_parse as NekoParse
@@ -53,7 +39,7 @@ comment_variable() {
 json_variable() {
 	python3 <<-EOF
 		import npk_parse as NekoParse
-		NekoParse.JsonVariable("$1", "$2")
+		NekoParse.JsonVariable("$1", "$2", "$3")
 	EOF
 }
 
@@ -383,14 +369,16 @@ create_package() {
 		: > "$WORK"/manifest.json
 
 		echo '{' >> "$WORK"/manifest.json
-		echo -e '\t"name": "'${name}'",' >> "$WORK"/manifest.json
-		echo -e '\t"version": "'${version}'",' >> "$WORK"/manifest.json
-		echo -e '\t"release": "'${release}'",' >> "$WORK"/manifest.json
-		echo -e '\t"priority": "'${priority}'",' >> "$WORK"/manifest.json
-		echo -e '\t"summary": "'${summary}'",' >> "$WORK"/manifest.json
-		echo -e '\t"section": "'${section}'",' >> "$WORK"/manifest.json
-		[ "$url" ] && echo -e '\t"homepage": "'${url}'",' >> "$WORK"/manifest.json
-		echo -e '\t"maintainer": "'${maintainer}'"' >> "$WORK"/manifest.json
+		echo -e '\t"summary": {' >> "$WORK"/manifest.json
+		echo -e '\t\t"name": "'${name}'",' >> "$WORK"/manifest.json
+		echo -e '\t\t"version": "'${version}'",' >> "$WORK"/manifest.json
+		echo -e '\t\t"release": "'${release}'",' >> "$WORK"/manifest.json
+		echo -e '\t\t"priority": "'${priority}'",' >> "$WORK"/manifest.json
+		echo -e '\t\t"summary": "'${summary}'",' >> "$WORK"/manifest.json
+		echo -e '\t\t"section": "'${section}'",' >> "$WORK"/manifest.json
+		[ "$url" ] && echo -e '\t\t"homepage": "'${url}'",' >> "$WORK"/manifest.json
+		echo -e '\t\t"maintainer": "'${maintainer}'"' >> "$WORK"/manifest.json
+		echo -e '\t}' >> "$WORK"/manifest.json
 		echo '}' >> "$WORK"/manifest.json
 
 		if [ -n "$backup" ]; then

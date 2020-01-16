@@ -15,16 +15,18 @@ def CommentVariable(file, pattern):
 	with open(file, "r+") as kagamibuild:
 		text = kagamibuild.read().strip()
 		p = re.search("# %s:(.*)" % pattern, text)
-		if p != None:
+		if p:
 			p = p.group(0)
 			p = p.replace("# %s:" % pattern, "")
 			p = p.lstrip()
 			print(p)
 
-def JsonVariable(file, pattern):
+def JsonVariable(file, pattern, pattern2):
 	CheckFilePattern(file, pattern)
 	with open(file, "r+") as jsonfile:
 		data = json.load(jsonfile)
-		if data != None:
-			if data["%s" % pattern] != None:
-				print(data["%s" % pattern])
+		if data:
+			if data["%s" % pattern]:
+				i = data["%s" % pattern]
+				i = i["%s" % pattern2]
+				print(i)
