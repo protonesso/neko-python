@@ -1,4 +1,4 @@
-import os
+import os, sys
 from hashlib import blake2b
 
 def CheckFile(file):
@@ -12,4 +12,13 @@ def GenBlake2BSum(file):
 	with open(file, "rb") as f:
 		f = f.read()
 		p.update(f)
-	print(p.hexdigest())
+	return p.hexdigest()
+
+def CompareBlake2BSum(file, hash):
+	if hash is None:
+		print("Hash wasn't specified")
+		sys.exit(1)
+	p = GenBlake2BSum(file)
+	if p != hash:
+		print("File hash and specfied hash are not same")
+		sys.exit(1)

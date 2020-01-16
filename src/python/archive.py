@@ -1,7 +1,4 @@
-import os
-import sys
-import zipfile
-import tarfile
+import os, sys, zipfile, tarfile
 
 def CreateCheck(path, file):
 	if file is None:

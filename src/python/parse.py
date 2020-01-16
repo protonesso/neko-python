@@ -1,6 +1,4 @@
-import os
-import re
-import json
+import os, sys, re, json
 
 def CheckFilePattern(file, pattern):
 	if file is None or not os.path.exists(file):
