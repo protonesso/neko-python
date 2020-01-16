@@ -94,7 +94,7 @@ list_subtract() {
 
 list_uninstall() {
 	local f p
-	local files=$(sort -r "$1" | sed 's:^:'"${ROOTDIR}/"': ; s:/^[^\.]\./::g; s:/\{2,\}:/:g; s:/\./:/:g')
+	local files=$(sort -r "$1" | sed 's:^:'"${rootdir}/"': ; s:/^[^\.]\./::g; s:/\{2,\}:/:g; s:/\./:/:g')
 	if [ -z "$DRYRUN" ] ; then
 		echo "$files" | tr '\n' '\0' | xargs -0 rm 2>/dev/null
 		echo "$files" | tr '\n' '\0' | xargs -0 rmdir 2>/dev/null
@@ -408,7 +408,7 @@ compile_package() {
 
 
 create_package() {
-	local toinclude="manifest.json"
+	local toinclude="summary.json"
 	mkdir -p "$WORK/final"
 
 	pushd "$WORK"
@@ -426,20 +426,20 @@ create_package() {
 			priority="optional"
 		fi
 
-		: > "$WORK"/manifest.json
+		: > "$WORK"/summary.json
 
-		echo '{' >> "$WORK"/manifest.json
-		echo -e '\t"summary": {' >> "$WORK"/manifest.json
-		echo -e '\t\t"name": "'${name}'",' >> "$WORK"/manifest.json
-		echo -e '\t\t"version": "'${version}'",' >> "$WORK"/manifest.json
-		echo -e '\t\t"release": "'${release}'",' >> "$WORK"/manifest.json
-		echo -e '\t\t"priority": "'${priority}'",' >> "$WORK"/manifest.json
-		echo -e '\t\t"summary": "'${summary}'",' >> "$WORK"/manifest.json
-		echo -e '\t\t"section": "'${section}'",' >> "$WORK"/manifest.json
-		[ "$url" ] && echo -e '\t\t"homepage": "'${url}'",' >> "$WORK"/manifest.json
-		echo -e '\t\t"maintainer": "'${maintainer}'"' >> "$WORK"/manifest.json
-		echo -e '\t}' >> "$WORK"/manifest.json
-		echo '}' >> "$WORK"/manifest.json
+		echo '{' >> "$WORK"/summary.json
+		echo -e '\t"summary": {' >> "$WORK"/summary.json
+		echo -e '\t\t"name": "'${name}'",' >> "$WORK"/summary.json
+		echo -e '\t\t"version": "'${version}'",' >> "$WORK"/summary.json
+		echo -e '\t\t"release": "'${release}'",' >> "$WORK"/summary.json
+		echo -e '\t\t"priority": "'${priority}'",' >> "$WORK"/summary.json
+		echo -e '\t\t"summary": "'${summary}'",' >> "$WORK"/summary.json
+		echo -e '\t\t"section": "'${section}'",' >> "$WORK"/summary.json
+		[ "$url" ] && echo -e '\t\t"homepage": "'${url}'",' >> "$WORK"/summary.json
+		echo -e '\t\t"maintainer": "'${maintainer}'"' >> "$WORK"/summary.json
+		echo -e '\t}' >> "$WORK"/summary.json
+		echo '}' >> "$WORK"/summary.json
 
 		if [ -n "$backup" ]; then
 			for a in ${backup[@]}; do
@@ -503,21 +503,21 @@ npk_build() {
 			fi
 		fi
 
-		if [ "$download" != "no" ]; then
+		if [ "$nodownload" != "yes" ]; then
 			download_source
 		fi
 
-		if [ "$extract" != "no" ]; then
+		if [ "$noextract" != "yes" ]; then
 			unpack_source
 		fi
 
-		if [ "$build" != "no" ]; then
+		if [ "$nobuild" != "yes" ]; then
 			compile_package
 		fi
 
-		if [ "$package" != "no" ]; then
+		if [ "$nopackage" != "yes" ]; then
 			create_package
-			if [ "$clean" != "no" ]; then
+			if [ "$noclean" != "yes" ]; then
 				rm -rf "$WORK"
 			fi
 		fi
@@ -537,19 +537,19 @@ run_backup() {
 			save)
 				msg "Saving files for backup"
 				while IFS= read -r mybackup; do
-					if [ -f "$ROOTDIR/$mybackup" ]; then
-						mv "$ROOTDIR/$mybackup" "$ROOTDIR/$mybackup.bak" || die "Failed to save file: ${mybackup}"
+					if [ -f "$rootdir/$mybackup" ]; then
+						mv "$rootdir/$mybackup" "$rootdir/$mybackup.bak" || die "Failed to save file: ${mybackup}"
 					fi
 				done < "$backup"
 				;;
 			restore)
 				msg "Restoring old files"
 				while IFS= read -r mybackup; do
-					if [ -f "$ROOTDIR/$mybackup.bak" ]; then
-						if [ -f "$ROOTDIR/$mybackup" ]; then
-							mv "$ROOTDIR/$mybackup" "$ROOTDIR/$mybackup.new" || die "Failed to save new file: ${mybackup}"
+					if [ -f "$rootdir/$mybackup.bak" ]; then
+						if [ -f "$rootdir/$mybackup" ]; then
+							mv "$rootdir/$mybackup" "$rootdir/$mybackup.new" || die "Failed to save new file: ${mybackup}"
 						fi
-						mv "$ROOTDIR/$mybackup.bak" "$ROOTDIR/$mybackup" || die "Failed to restore file: ${mybackup}"
+						mv "$rootdir/$mybackup.bak" "$rootdir/$mybackup" || die "Failed to restore file: ${mybackup}"
 					fi
 				done < "$backup"
 				;;
@@ -562,10 +562,39 @@ run_scripts() {
 	local action="$2"
 
 	if [ -x "$script" ]; then
-		cp "$script" "$ROOTDIR/install"
+		cp "$script" "$rootdir/install"
 		msg "Running $action script"
-		xchroot "${ROOTDIR}/" /install $action
-		rm -rf "$ROOTDIR/install"
+		xchroot "${rootdir}/" /install $action
+		rm -rf "$rootdir/install"
+	fi
+}
+
+run_triggers() {
+	local pkg="$1"
+
+	if [ "$notriggers" != "yes" ]; then
+		if [ -d "${rootdir}${tgdir}" ]; then
+			if [ -n "$(ls ${rootdir}${tgdir})" ]; then
+				for triggers in "${rootdir}${tgdir}/"*; do
+					local trigname="$(parse_json $triggers trigger name)"
+					local trigdest="$(parse_json $triggers trigger directory | tr -d '[],')"
+					local trigcmd="$(parse_json $triggers trigger command)"
+
+					if [ -n "$trigname" ] && [ -n "$trigdest" ]; then
+						for a in $trigdest; do
+							if [ -f "${rootdir}${dbdir}/$pkg/files.txt" ]; then
+								grep -q -F "$trigdest" "${rootdir}${dbdir}/$pkg/files.txt"  && {
+									if [ -n "$trigcmd" ]; then
+										msg "Running triggers: $trigname"
+										xchroot "${rootdir}/" $trigcmd
+									fi
+								}
+							fi
+						done
+					fi
+				done
+			fi
+		fi
 	fi
 }
 
@@ -579,7 +608,7 @@ npk_install() {
 	[ ! -f "$pkg" ] && die "Your package file was not found or not specified"
 	[ "${pkg##*.}" != "npk" ] && die "This file does not end in .npk"
 
-	[ -z "$(list_zip $pkg | grep -oh 'manifest.json')" ] && die "It is not a neko package"
+	[ -z "$(list_zip $pkg | grep -oh 'summary.json')" ] && die "It is not a neko package"
 
 	if [ "$rootdir" ] && [ ! -d "$rootdir" ]; then
 		mkdir -p "$rootdir"
@@ -588,13 +617,13 @@ npk_install() {
 	tmpdir="$(mktemp -d)" || die "Couldn't create a temporary directory"
 	unpack_zip "$tmpdir" "$pkg"
 
-	local localname="$(parse_json $tmpdir/manifest.json summary name)"
-	local localver="$(parse_json $tmpdir/manifest.json summary version)"
-	local localrel="$(parse_json $tmpdir/manifest.json summary release)"
+	local localname="$(parse_json $tmpdir/summary.json summary name)"
+	local localver="$(parse_json $tmpdir/summary.json summary version)"
+	local localrel="$(parse_json $tmpdir/summary.json summary release)"
 
 	[ -z "$localname" ] && die "Your package is broken"
 
-	if [ -f "${rootdir}${DBDIR}/$localname/manifest.json" ]; then
+	if [ -f "${rootdir}${dbdir}/$localname/summary.json" ]; then
 		if [ "$needed" = "yes" ]; then
 			warn "$localname: This package has been already installed"
 			return 0
@@ -611,7 +640,7 @@ npk_install() {
 
 	if [ "$force" != "yes" ] && [ "$update" != "true" ]; then
 		msg "Checking for file conflicts"
-		if [ ! -f "${rootdir}${DBDIR}/$localname/manifest.json" ]; then
+		if [ ! -f "${rootdir}${dbdir}/$localname/summary.json" ]; then
 			for fileconflicts in $(list_xz $tmpdir/install.tar.xz); do
 				if [ -f "$rootdir/$fileconflicts" ] || [ -L "$rootdir/$fileconflicts" ]; then
 					echo "$fileconflicts" >> /tmp/conflicts
@@ -620,17 +649,18 @@ npk_install() {
 			if [ -f "/tmp/conflicts" ]; then
 				warn "Following files couldn't be overwritten"
 				cat /tmp/conflicts
+				rm /tmp/conflicts
 				exit 1
 			fi
 		fi
 	fi
 
-	if [ "$scripts" != "no" ]; then
+	if [ "$noscripts" != "yes" ]; then
 		if [ -f "$tmpdir/install" ]; then
 			run_scripts "$tmpdir/install" pre-install
 		fi
 	fi
-	if [ "$backup" != "no" ]; then
+	if [ "$nobackup" != "yes" ]; then
 		if [ -f "$tmpdir/backup" ]; then
 			run_backup "$tmpdir/backup" save
 		fi
@@ -643,19 +673,19 @@ npk_install() {
 	fi
 
 	if [ "$update" = "true" ]; then
-		if [ -f "$tmpdir/files.txt" ] && [ -f "${ROOTDIR}${DBDIR}/$localname/files" ]; then
-			msg -1 "Removing old files"
-			list_subtract "${ROOTDIR}${DBDIR}/$localname/files" "$tmpdir/files.txt" | list_uninstall - || true
+		if [ -f "$tmpdir/files.txt" ] && [ -f "${rootdir}${dbdir}/$localname/files.txt" ]; then
+			msg "Removing old files"
+			list_subtract "${rootdir}${dbdir}/$localname/files.txt" "$tmpdir/files.txt" | list_uninstall - || true
 		fi
 	fi
 
-	if [ "$backup" != "no" ]; then
+	if [ "$nobackup" != "yes" ]; then
 		if [ -f "$tmpdir/backup" ]; then
 			run_backup "$tmpdir/backup" restore
 		fi
 	fi
 
-	if [ "$scripts" != "no" ]; then
+	if [ "$noscripts" != "yes" ]; then
 		if [ -f "$tmpdir/install" ]; then
 			run_scripts "$tmpdir/install" post-install
 		fi
@@ -663,19 +693,19 @@ npk_install() {
 
 	msg "Installing package info"
 	if [ "$update" = "true" ]; then
-		rm -rf "${rootdir}${DBDIR}/$localname"
-		mkdir -p "${rootdir}${DBDIR}/$localname"
+		rm -rf "${rootdir}${dbdir}/$localname"
+		mkdir -p "${rootdir}${dbdir}/$localname"
 	else
-		mkdir -p "${rootdir}${DBDIR}/$localname"
+		mkdir -p "${rootdir}${dbdir}/$localname"
 	fi
 
-	for files in manifest.json files.txt backup install; do
+	for files in summary.json files.txt backup install; do
 		if [ -f "$tmpdir/$files" ]; then
-			install -Dm0644 "$tmpdir/$files" "${rootdir}${DBDIR}/$localname/$files"
+			install -Dm0644 "$tmpdir/$files" "${rootdir}${dbdir}/$localname/$files"
 		fi
 	done
 
-	#run_triggers $localname
+	run_triggers $localname
 
 	rm -rf "$tmpdir" "/tmp/conflicts" "$rootdir/install"
 	msg "Package was successfully installed"
@@ -683,7 +713,71 @@ npk_install() {
 	trap INT
 }
 
+npk_remove() {
+	local pkg="$1"
+
+	[ -z "$pkg" ] && die "Your package was not specified"
+	[ ! -f "${rootdir}${dbdir}/$pkg/summary.json" ] && die "Your package is not installed"
+
+	local localname="$(parse_json ${rootdir}${dbdir}/$pkg/summary.json summary name)"
+	local localpriority="$(parse_json ${rootdir}${dbdir}/$pkg/summary.json summary priority)"
+
+	[ -z "$localname" ] && die "Your package is broken"
+
+	if [ "$localpriority" = "required" ] && [ "$force" != "yes" ]; then
+		die "Can not remove system required package"
+	fi
+
+	msg "Removing package: $localname"
+
+	trap "" INT
+
+	if [ "$noscripts" != "yes" ]; then
+		if [ -x "${rootdir}${dbdir}/$localname/install" ]; then
+			run_scripts "${rootdir}${dbdir}/$localname/install" pre-remove
+		fi
+	fi
+
+	if [ "$nobackup" != "yes" ]; then
+		if [ -f "${rootdir}${dbdir}/$localname/backup" ]; then
+			run_backup"${rootdir}${dbdir}/$localname/backup" save
+		fi
+	fi
+
+	if [ -f "${rootdir}${dbdir}/$localname/files.txt" ]; then
+		msg "Removing files"
+		local dirlist=`grep '/$' "${rootdir}${dbdir}/$localname/files.txt"`
+		local nondir=`grep -v '/$' "${rootdir}${dbdir}/$localname/files.txt"`
+		list_uninstall "${rootdir}${dbdir}/$localname/files.txt"
+		if [ $? -gt 1 ]; then
+			die "Failed to remove package"
+		fi
+	fi
+
+	if [ "$nobackup" != "yes" ]; then
+		if [ -f "${rootdir}${dbdir}/$localname/backup" ]; then
+			run_backup "${rootdir}${dbdir}/$localname/backup" restore
+		fi
+	fi
+
+	if [ "$noscripts" != "yes" ]; then
+		if [ -x "${rootdir}${dbdir}/$localname/install" ]; then
+			run_scripts "${rootdir}${dbdir}/$localname/install" post-remove
+		fi
+	fi
+
+	msg "Removing package info"
+	rm -rf "${rootdir}${dbdir}/$localname"
+
+	msg "Package was successfully removed"
+
+	trap INT
+}
+
 main() {
+	readonly dbdir="/var/lib/neko"
+	readonly tgdir="/var/lib/neko-triggers"
+
 	topdir="$PWD"
 	config="/etc/neko/make.conf"
 	OPTIONS=('emptydirs' 'strip' 'makeflags' 'locales' 'docs' 'ccache' 'libtool' '~bootstrap' '~embedded')
@@ -691,16 +785,16 @@ main() {
 	force="no"
 	bootstrap="no"
 	needed="no"
-	depends="yes"
-	conflicts="yes"
-	backup="yes"
-	scripts="yes"
-	triggers="yes"
-	clean="yes"
-	download="yes"
-	extract="yes"
-	build="yes"
-	package="yes"
+	nodepends="no"
+	noconflicts="no"
+	nobackup="no"
+	noscripts="no"
+	notriggers="no"
+	noclean="no"
+	nodownload="no"
+	noextract="no"
+	nobuild="no"
+	nopackage="no"
 
 	case $1 in
 		build|bi) shift; mode="npk_build" ;;
@@ -723,16 +817,16 @@ main() {
 			f) force="yes" ;;
 			w) bootstrap="yes" ;;
 			n) needed="yes" ;;
-			d) depends="no" ;;
-			e) conflicts="no" ;;
-			b) backup="no" ;;
-			s) scripts="no" ;;
-			t) triggers="no" ;;
-			C) clean="no" ;;
-			D) download="no" ;;
-			E) extract="no" ;;
-			B) build="no" ;;
-			P) package="no" ;;
+			d) nodepends="yes" ;;
+			e) noconflicts="yes" ;;
+			b) nobackup="yes" ;;
+			s) noscripts="yes" ;;
+			t) notriggers="yes" ;;
+			C) noclean="yes" ;;
+			D) nodownload="yes" ;;
+			E) noextract="yes" ;;
+			B) nobuild="yes" ;;
+			P) nopackage="yes" ;;
 		esac
 	done
 	shift $((OPTIND - 1))
