@@ -27,6 +27,6 @@ def JsonVariable(file, pattern, pattern2):
 		data = json.load(jsonfile)
 		if data:
 			if data["%s" % pattern]:
-				i = data["%s" % pattern]
-				i = i["%s" % pattern2]
-				print(i)
+				p = data["%s" % pattern]
+				p = p["%s" % pattern2]
+				print(p)
