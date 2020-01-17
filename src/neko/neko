@@ -418,7 +418,7 @@ create_package() {
 
 			find $(ls) >> "$WORK"/files.txt
 
-			toinclude+=" install.tar.xz files.txt"
+			toinclude+=" install.tar.xz files.txt sums.txt"
 		popd
 
 		msg "Generating metadata"
@@ -450,7 +450,7 @@ create_package() {
 		fi
 
 		if [ -f "$topdir/install" ]; then
-			install -Dm0755 "$topdir/install" "$WORKDIR/install"
+			install -Dm0755 "$topdir/install" "$WORK/install"
 
 			toinclude+=" install"
 		fi
